@@ -17,13 +17,7 @@ import (
 type duoResults_t struct {
 	AccountType string `json:"account_type"`
 	Devices     struct {
-		Devices []struct {
-			Capabilities []string `json:"capabilities"`
-			Device       string   `json:"device"`
-			DisplayName  string   `json:"display_name"`
-			SmsNextcode  string   `json:"sms_nextcode,omitempty"`
-			Type         string   `json:"type"`
-		} `json:"devices"`
+		Devices []duoDevice_t `json:"devices"`
 	} `json:"devices"`
 	Error            string `json:"error"`
 	Referrer         string `json:"referrer"`
@@ -31,6 +25,14 @@ type duoResults_t struct {
 	RequiredFactors  string `json:"requiredFactors"`
 	SatisfiedFactors string `json:"satisfiedFactors"`
 	Service          string `json:"service"`
+}
+
+type duoDevice_t struct {
+	Capabilities []string `json:"capabilities"`
+	Device       string   `json:"device"`
+	DisplayName  string   `json:"display_name"`
+	SmsNextcode  string   `json:"sms_nextcode,omitempty"`
+	Type         string   `json:"type"`
 }
 
 func main() {
@@ -76,6 +78,7 @@ func main() {
 	re := regexp.MustCompile(`var\s+duoResults\s+=\s+({[\S\s]*});`)
 	matches := re.FindStringSubmatch(browser.Body())
 	if len(matches) != 2 {
+		// TODO: handle the case where this account is not enrolled in Duo
 		fmt.Errorf("Something went wrong, duoResults variable not present on page after submitting login\n")
 		os.Exit(1)
 	}
@@ -89,7 +92,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// call otto's .ToString()
+	// call otto's .ToString() on duoResultsJSON to turn it from a ott.Value to a string
 	duoResultsJSON, err := stringifyOutput.ToString()
 	if err != nil {
 		fmt.Errorf(".ToString() returned `%s`\n", err)
@@ -100,7 +103,49 @@ func main() {
 	var duoResults duoResults_t
 	json.Unmarshal([]byte(duoResultsJSON), &duoResults)
 
-	fmt.Printf("%+v\n", duoResults)
+	if len(duoResults.Devices.Devices) == 0 {
+		fmt.Errorf("No 2FA devices returned, or user not enrolled. %s", duoResults.Error)
+		os.Exit(1)
+	}
+
+	// present list of 2FA options
+	var devices []duoDevice_t                // contain our list of devices
+	devices = append(devices, duoDevice_t{}) // skip index 0
+
+	fmt.Printf("Enter a passcode or select one of the following options:\n\n")
+
+	// Push
+	for _, d := range duoResults.Devices.Devices {
+		if stringInSlice("push", d.Capabilities) {
+			devices = append(devices, d)
+			fmt.Printf(" %d. Duo Push to %s\n", len(devices)-1, d.DisplayName)
+		}
+	}
+
+	// Phone
+	for _, d := range duoResults.Devices.Devices {
+		if stringInSlice("phone", d.Capabilities) {
+			devices = append(devices, d)
+			fmt.Printf(" %d. Phone call to %s\n", len(devices)-1, d.DisplayName)
+		}
+	}
+
+	// SMS
+	for _, d := range duoResults.Devices.Devices {
+		if stringInSlice("sms", d.Capabilities) {
+			devices = append(devices, d)
+			nextcode := ""
+			if d.SmsNextcode != "" {
+				nextcode = fmt.Sprintf("(next code starts with %s)", d.SmsNextcode)
+			}
+			fmt.Printf(" %d. SMS passcodes to %s %s\n", len(devices)-1, d.DisplayName, nextcode)
+		}
+	}
+
+	// device id -> duo_device
+	// passcode -> duo_passcode
+	// phone|push|passcode|sms(request new codes) -> duo_factor
+	//	fmt.Printf("%+v\n", duoResults)
 }
 
 func credentials() (string, string) {
@@ -116,4 +161,13 @@ func credentials() (string, string) {
 	fmt.Println()
 
 	return strings.TrimSpace(username), strings.TrimSpace(password)
+}
+
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
 }
