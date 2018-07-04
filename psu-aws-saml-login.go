@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"github.com/RobotsAndPencils/go-saml"
 	"github.com/headzoo/surf"
 	"github.com/robertkrimen/otto"
 	"golang.org/x/crypto/ssh/terminal"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,7 +35,10 @@ type duoDevice_t struct {
 	DisplayName  string   `json:"display_name"`
 	SmsNextcode  string   `json:"sms_nextcode,omitempty"`
 	Type         string   `json:"type"`
+	OptionType   string   `json:"omitempty"`
 }
+
+const AWS_SAML_ROLE_ATTRIBUTE = "https://aws.amazon.com/SAML/Attributes/Role"
 
 func main() {
 	timeout, _ := time.ParseDuration("10s")
@@ -48,7 +53,7 @@ func main() {
 	fmt.Printf("Sending request to IdP: %s\n", idpUrl)
 	err := browser.Open(idpUrl)
 	if err != nil {
-		fmt.Errorf("error: %s\n", err)
+		fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		os.Exit(1)
 	}
 
@@ -57,7 +62,7 @@ func main() {
 	// find our login form
 	fm, err := browser.Form("form")
 	if err != nil {
-		fmt.Errorf("error: %s\n", err)
+		fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		os.Exit(1)
 	}
 
@@ -70,7 +75,7 @@ func main() {
 	fm.Input("password", password)
 	err = fm.Submit()
 	if err != nil {
-		fmt.Errorf("error: %s", err)
+		fmt.Fprintf(os.Stderr, "error: %s", err)
 		os.Exit(1)
 	}
 
@@ -79,7 +84,7 @@ func main() {
 	matches := re.FindStringSubmatch(browser.Body())
 	if len(matches) != 2 {
 		// TODO: handle the case where this account is not enrolled in Duo
-		fmt.Errorf("Something went wrong, duoResults variable not present on page after submitting login\n")
+		fmt.Fprintf(os.Stderr, "Something went wrong, duoResults variable not present on page after submitting login\n")
 		os.Exit(1)
 	}
 
@@ -88,14 +93,14 @@ func main() {
 	vm.Set("input", matches[1])
 	stringifyOutput, err := vm.Run(`JSON.stringify( eval('('+input+')') )`)
 	if err != nil {
-		fmt.Errorf("JSON.stringify returned `%s`\n", err)
+		fmt.Fprintf(os.Stderr, "JSON.stringify returned `%s`\n", err)
 		os.Exit(1)
 	}
 
 	// call otto's .ToString() on duoResultsJSON to turn it from a ott.Value to a string
 	duoResultsJSON, err := stringifyOutput.ToString()
 	if err != nil {
-		fmt.Errorf(".ToString() returned `%s`\n", err)
+		fmt.Fprintf(os.Stderr, ".ToString() returned `%s`\n", err)
 		os.Exit(1)
 	}
 
@@ -104,7 +109,7 @@ func main() {
 	json.Unmarshal([]byte(duoResultsJSON), &duoResults)
 
 	if len(duoResults.Devices.Devices) == 0 {
-		fmt.Errorf("No 2FA devices returned, or user not enrolled. %s", duoResults.Error)
+		fmt.Fprintf(os.Stderr, "No 2FA devices returned: %s", duoResults.Error)
 		os.Exit(1)
 	}
 
@@ -118,6 +123,7 @@ func main() {
 	for _, d := range duoResults.Devices.Devices {
 		if stringInSlice("push", d.Capabilities) {
 			devices = append(devices, d)
+			devices[len(devices)-1].OptionType = "push"
 			fmt.Printf(" %d. Duo Push to %s\n", len(devices)-1, d.DisplayName)
 		}
 	}
@@ -126,6 +132,7 @@ func main() {
 	for _, d := range duoResults.Devices.Devices {
 		if stringInSlice("phone", d.Capabilities) {
 			devices = append(devices, d)
+			devices[len(devices)-1].OptionType = "phone"
 			fmt.Printf(" %d. Phone call to %s\n", len(devices)-1, d.DisplayName)
 		}
 	}
@@ -134,6 +141,7 @@ func main() {
 	for _, d := range duoResults.Devices.Devices {
 		if stringInSlice("sms", d.Capabilities) {
 			devices = append(devices, d)
+			devices[len(devices)-1].OptionType = "sms"
 			nextcode := ""
 			if d.SmsNextcode != "" {
 				nextcode = fmt.Sprintf("(next code starts with %s)", d.SmsNextcode)
@@ -142,10 +150,66 @@ func main() {
 		}
 	}
 
-	// device id -> duo_device
-	// passcode -> duo_passcode
-	// phone|push|passcode|sms(request new codes) -> duo_factor
-	//	fmt.Printf("%+v\n", duoResults)
+	// prompt for 2fa option
+	var option string
+	var optint int
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Printf("Passcode or option (1-%d): ", len(devices)-1)
+		option, _ = reader.ReadString('\n')
+
+		optint, err = strconv.Atoi(strings.TrimSpace(option))
+		if err != nil || optint < 1 {
+			fmt.Fprintf(os.Stderr, "Invalid option: %s\n", option)
+		} else {
+			break
+		}
+	}
+
+	// find the 2fa form
+	fm, err = browser.Form("form")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not locate 2FA form: %s\n", err)
+		os.Exit(1)
+	}
+
+	// fill out form
+	// note: duo_factor is added to the form dynamically, so we Set() instead of Input()
+	if optint > len(devices)-1 {
+		// selection is larger than the number of options, assume it is a passcode
+		fm.Input("duo_passcode", option)
+		fm.Set("duo_factor", "passcode")
+	} else {
+		// one of the radio options was selected
+		fm.Input("duo_device", devices[optint].Device)
+		err = fm.Set("duo_factor", devices[optint].OptionType)
+		fmt.Println(err)
+	}
+
+	// submit form
+	err = fm.Submit()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error when submitting form: %s", err)
+		os.Exit(1)
+	}
+
+	// pull the assertion out of the response
+	doc := browser.Dom()
+	s := doc.Find("input[name=SAMLResponse]").First()
+	assertion, ok := s.Attr("value")
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Response did not provide a SAML assertion (SAMLResponse html element)\n")
+		os.Exit(1)
+	}
+
+	response, err := saml.ParseEncodedResponse(assertion)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "SAMLResponse parse: %s\n", err)
+		os.Exit(1)
+	}
+
+	roles := response.GetAttributeValues(AWS_SAML_ROLE_ATTRIBUTE)
+	fmt.Printf("%+v\n", roles)
 }
 
 func credentials() (string, string) {
