@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/RobotsAndPencils/go-saml"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/sts"
 	"github.com/headzoo/surf"
 	"github.com/robertkrimen/otto"
 	"golang.org/x/crypto/ssh/terminal"
@@ -38,20 +40,22 @@ type duoDevice_t struct {
 	OptionType   string   `json:"omitempty"`
 }
 
+type awsRole struct {
+	PrincipalARN string
+	RoleARN      string
+}
+
 const AWS_SAML_ROLE_ATTRIBUTE = "https://aws.amazon.com/SAML/Attributes/Role"
+const IDP_URL = "https://as1.fim.psu.edu/idp/profile/SAML2/Unsolicited/SSO?providerId=urn:amazon:webservices"
 
 func main() {
-	timeout, _ := time.ParseDuration("10s")
-	idpUrl := "https://as1.fim.psu.edu/idp/profile/SAML2/Unsolicited/SSO?providerId=urn:amazon:webservices"
-	//awsRoleUrl := "https://aws.amazon.com/SAML/Attributes/Role"
-
 	// create our browser
 	browser := surf.NewBrowser()
-	browser.SetTimeout(timeout)
+	browser.SetTimeout(30 * time.Second)
 
 	// Send our request to the IdP, which will redirect us to WebAccess
-	fmt.Printf("Sending request to IdP: %s\n", idpUrl)
-	err := browser.Open(idpUrl)
+	fmt.Printf("Sending request to IdP: %s\n", IDP_URL)
+	err := browser.Open(IDP_URL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		os.Exit(1)
@@ -150,6 +154,8 @@ func main() {
 		}
 	}
 
+	fmt.Println()
+
 	// prompt for 2fa option
 	var option string
 	var optint int
@@ -187,6 +193,7 @@ func main() {
 	}
 
 	// submit form
+	browser.SetTimeout(60 * time.Second)
 	err = fm.Submit()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error when submitting form: %s", err)
@@ -202,14 +209,61 @@ func main() {
 		os.Exit(1)
 	}
 
+	// parse the response
 	response, err := saml.ParseEncodedResponse(assertion)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "SAMLResponse parse: %s\n", err)
 		os.Exit(1)
 	}
 
-	roles := response.GetAttributeValues(AWS_SAML_ROLE_ATTRIBUTE)
-	fmt.Printf("%+v\n", roles)
+	var roles []awsRole
+	for _, r := range response.GetAttributeValues(AWS_SAML_ROLE_ATTRIBUTE) {
+		sp := strings.Split(r, ",")
+		roles = append(roles, awsRole{PrincipalARN: sp[0], RoleARN: sp[1]})
+	}
+
+	// no roles
+	if len(roles) == 0 {
+		fmt.Fprintf(os.Stderr, "No AWS roles returned. Perhaps you do not have access to any accounts through this SAML provider?")
+		os.Exit(1)
+	}
+
+	// present list of roles
+	fmt.Printf("Select the role to assume:\n\n")
+	for r := range roles {
+		fmt.Printf(" %d. %s\n", r, roles[r].RoleARN)
+	}
+
+	fmt.Println()
+
+	// get selection
+	selection := 0
+	for {
+		fmt.Printf("Selection (0-%d): ", len(roles)-1)
+		str, _ := reader.ReadString('\n')
+		selection, _ = strconv.Atoi(strings.TrimSpace(str))
+		if selection < 0 || selection > len(roles)-1 {
+			fmt.Fprintf(os.Stderr, "selection is out of range: %d\n", selection)
+		} else {
+			break
+		}
+	}
+
+	// assume role
+	sess := session.Must(session.NewSession())
+	svc := sts.New(sess)
+	token, err := svc.AssumeRoleWithSAML(
+		&sts.AssumeRoleWithSAMLInput{
+			PrincipalArn:  &roles[selection].PrincipalARN,
+			RoleArn:       &roles[selection].RoleARN,
+			SAMLAssertion: &assertion,
+		})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "STS AssumeRoleWithSAML() error: %s\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("%+v\n", token)
+
 }
 
 func credentials() (string, string) {
