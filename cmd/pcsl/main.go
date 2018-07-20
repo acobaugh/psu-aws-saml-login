@@ -46,16 +46,102 @@ type awsRole struct {
 }
 
 const AWS_SAML_ROLE_ATTRIBUTE = "https://aws.amazon.com/SAML/Attributes/Role"
-const IDP_URL = "https://as1.fim.psu.edu/idp/profile/SAML2/Unsolicited/SSO?providerId=urn:amazon:webservices"
+const IDP_URL = "https://as1.fim.psu.edu/idp/profile/SAML2/Unsolicited/SSO"
+const AWS_IDP_REQUEST = "providerId=urn:amazon:webservices"
 
 func main() {
+	assertion, err := shibLogin(IDP_URL, AWS_IDP_REQUEST)
+
+	response, err := saml.ParseEncodedResponse(assertion)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "SAMLResponse parse: %s\n", err)
+		os.Exit(1)
+	}
+
+	var roles []awsRole
+	for _, r := range response.GetAttributeValues(AWS_SAML_ROLE_ATTRIBUTE) {
+		sp := strings.Split(r, ",")
+		roles = append(roles, awsRole{PrincipalARN: sp[0], RoleARN: sp[1]})
+	}
+
+	// no roles
+	if len(roles) == 0 {
+		fmt.Fprintf(os.Stderr, "No AWS roles returned. Perhaps you do not have access to any accounts through this SAML provider?")
+		os.Exit(1)
+	}
+
+	// present list of roles
+	fmt.Printf("Select the role to assume:\n\n")
+	for r := range roles {
+		fmt.Printf(" %d. %s\n", r, roles[r].RoleARN)
+	}
+
+	fmt.Println()
+
+	// get selection
+	selection := 0
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Printf("Selection (0-%d): ", len(roles)-1)
+		str, _ := reader.ReadString('\n')
+		selection, _ = strconv.Atoi(strings.TrimSpace(str))
+		if selection < 0 || selection > len(roles)-1 {
+			fmt.Fprintf(os.Stderr, "selection is out of range: %d\n", selection)
+		} else {
+			break
+		}
+	}
+
+	// assume role
+	sess := session.Must(session.NewSession())
+	svc := sts.New(sess)
+	token, err := svc.AssumeRoleWithSAML(
+		&sts.AssumeRoleWithSAMLInput{
+			PrincipalArn:  &roles[selection].PrincipalARN,
+			RoleArn:       &roles[selection].RoleARN,
+			SAMLAssertion: &assertion,
+		})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "STS AssumeRoleWithSAML() error: %s\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("%+v\n", token)
+
+}
+
+func credentials() (string, string) {
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print("Username: ")
+	username, _ := reader.ReadString('\n')
+
+	fmt.Print("Password: ")
+	bytePassword, _ := terminal.ReadPassword(int(syscall.Stdin))
+	password := string(bytePassword)
+
+	fmt.Println()
+
+	return strings.TrimSpace(username), strings.TrimSpace(password)
+}
+
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
+}
+
+func shibLogin(idpUrl string, idpRequest string) (string, error) {
 	// create our browser
 	browser := surf.NewBrowser()
 	browser.SetTimeout(30 * time.Second)
 
 	// Send our request to the IdP, which will redirect us to WebAccess
-	fmt.Printf("Sending request to IdP: %s\n", IDP_URL)
-	err := browser.Open(IDP_URL)
+	requestUrl := fmt.Sprintf("%s?%s", idpUrl, idpRequest)
+	fmt.Printf("Sending request to IdP: %s\n", requestUrl)
+	err := browser.Open(requestUrl)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		os.Exit(1)
@@ -209,83 +295,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	// parse the response
-	response, err := saml.ParseEncodedResponse(assertion)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "SAMLResponse parse: %s\n", err)
-		os.Exit(1)
-	}
-
-	var roles []awsRole
-	for _, r := range response.GetAttributeValues(AWS_SAML_ROLE_ATTRIBUTE) {
-		sp := strings.Split(r, ",")
-		roles = append(roles, awsRole{PrincipalARN: sp[0], RoleARN: sp[1]})
-	}
-
-	// no roles
-	if len(roles) == 0 {
-		fmt.Fprintf(os.Stderr, "No AWS roles returned. Perhaps you do not have access to any accounts through this SAML provider?")
-		os.Exit(1)
-	}
-
-	// present list of roles
-	fmt.Printf("Select the role to assume:\n\n")
-	for r := range roles {
-		fmt.Printf(" %d. %s\n", r, roles[r].RoleARN)
-	}
-
-	fmt.Println()
-
-	// get selection
-	selection := 0
-	for {
-		fmt.Printf("Selection (0-%d): ", len(roles)-1)
-		str, _ := reader.ReadString('\n')
-		selection, _ = strconv.Atoi(strings.TrimSpace(str))
-		if selection < 0 || selection > len(roles)-1 {
-			fmt.Fprintf(os.Stderr, "selection is out of range: %d\n", selection)
-		} else {
-			break
-		}
-	}
-
-	// assume role
-	sess := session.Must(session.NewSession())
-	svc := sts.New(sess)
-	token, err := svc.AssumeRoleWithSAML(
-		&sts.AssumeRoleWithSAMLInput{
-			PrincipalArn:  &roles[selection].PrincipalARN,
-			RoleArn:       &roles[selection].RoleARN,
-			SAMLAssertion: &assertion,
-		})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "STS AssumeRoleWithSAML() error: %s\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("%+v\n", token)
-
-}
-
-func credentials() (string, string) {
-	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Print("Username: ")
-	username, _ := reader.ReadString('\n')
-
-	fmt.Print("Password: ")
-	bytePassword, _ := terminal.ReadPassword(int(syscall.Stdin))
-	password := string(bytePassword)
-
-	fmt.Println()
-
-	return strings.TrimSpace(username), strings.TrimSpace(password)
-}
-
-func stringInSlice(a string, list []string) bool {
-	for _, b := range list {
-		if b == a {
-			return true
-		}
-	}
-	return false
+	return assertion, nil
 }
