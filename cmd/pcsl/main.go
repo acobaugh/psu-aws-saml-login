@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/RobotsAndPencils/go-saml"
+	"github.com/alexflint/go-arg"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sts"
 	"github.com/headzoo/surf"
@@ -45,12 +46,20 @@ type awsRole struct {
 	RoleARN      string
 }
 
+type args_t struct {
+	ExportEnv bool   `arg:"-e",help:"Provide 'export foo = bar' output to copy/paste into another terminal"`
+	User      string `arg:"-u",help:"Access Account username"`
+}
+
 const AWS_SAML_ROLE_ATTRIBUTE = "https://aws.amazon.com/SAML/Attributes/Role"
 const IDP_URL = "https://as1.fim.psu.edu/idp/profile/SAML2/Unsolicited/SSO"
 const AWS_IDP_REQUEST = "providerId=urn:amazon:webservices"
 
 func main() {
-	assertion, err := shibLogin(IDP_URL, AWS_IDP_REQUEST)
+	var args args_t
+	arg.MustParse(&args)
+
+	assertion, err := shibLogin(args, IDP_URL, AWS_IDP_REQUEST)
 
 	response, err := saml.ParseEncodedResponse(assertion)
 	if err != nil {
@@ -109,11 +118,16 @@ func main() {
 
 }
 
-func credentials() (string, string) {
+func credentials(args args_t) (string, string) {
 	reader := bufio.NewReader(os.Stdin)
 
-	fmt.Print("Username: ")
-	username, _ := reader.ReadString('\n')
+	var username string
+	if args.User == "" {
+		fmt.Print("Username: ")
+		username, _ = reader.ReadString('\n')
+	} else {
+		username = args.User
+	}
 
 	fmt.Print("Password: ")
 	bytePassword, _ := terminal.ReadPassword(int(syscall.Stdin))
@@ -133,7 +147,7 @@ func stringInSlice(a string, list []string) bool {
 	return false
 }
 
-func shibLogin(idpUrl string, idpRequest string) (string, error) {
+func shibLogin(args args_t, idpUrl string, idpRequest string) (string, error) {
 	// create our browser
 	browser := surf.NewBrowser()
 	browser.SetTimeout(30 * time.Second)
@@ -157,7 +171,7 @@ func shibLogin(idpUrl string, idpRequest string) (string, error) {
 	}
 
 	// Prompt user for creds
-	username, password := credentials()
+	username, password := credentials(args)
 
 	// submit username/password
 	fmt.Printf("Submitting creds to: %s\n", fm.Action())
