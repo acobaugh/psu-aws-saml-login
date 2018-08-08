@@ -79,25 +79,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	// present list of roles
-	fmt.Printf("Select the role to assume:\n\n")
-	for r := range roles {
-		fmt.Printf(" %d. %s\n", r, roles[r].RoleARN)
-	}
-
-	fmt.Println()
-
 	// get selection
 	selection := 0
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Printf("Selection (0-%d): ", len(roles)-1)
-		str, _ := reader.ReadString('\n')
-		selection, _ = strconv.Atoi(strings.TrimSpace(str))
-		if selection < 0 || selection > len(roles)-1 {
-			fmt.Fprintf(os.Stderr, "selection is out of range: %d\n", selection)
-		} else {
-			break
+	if len(roles) > 1 {
+		// present list of roles
+		fmt.Printf("Select the role to assume:\n\n")
+		for r := range roles {
+			fmt.Printf(" %d. %s\n", r, roles[r].RoleARN)
+		}
+		reader := bufio.NewReader(os.Stdin)
+		for {
+			fmt.Printf("\nSelection (0-%d): ", len(roles)-1)
+			str, _ := reader.ReadString('\n')
+			selection, _ = strconv.Atoi(strings.TrimSpace(str))
+			if selection < 0 || selection > len(roles)-1 {
+				fmt.Fprintf(os.Stderr, "selection is out of range: %d\n", selection)
+			} else {
+				break
+			}
 		}
 	}
 
@@ -114,8 +113,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "STS AssumeRoleWithSAML() error: %s\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("%+v\n", token)
-
+	if args.ExportEnv {
+		fmt.Print("============\n")
+		fmt.Printf("export AWS_ACCESS_KEY_ID=\"%s\"\n", *token.Credentials.AccessKeyId)
+		fmt.Printf("export AWS_SECRET_ACCESS_KEY=\"%s\"\n", *token.Credentials.SecretAccessKey)
+		fmt.Printf("export AWS_SESSION_TOKEN=\"%s\"\n", *token.Credentials.SessionToken)
+	}
 }
 
 func credentials(args args_t) (string, string) {
@@ -221,7 +224,7 @@ func shibLogin(args args_t, idpUrl string, idpRequest string) (string, error) {
 	var devices []duoDevice_t                // contain our list of devices
 	devices = append(devices, duoDevice_t{}) // skip index 0
 
-	fmt.Printf("Enter a passcode or select one of the following options:\n\n")
+	fmt.Print("Enter a passcode or select one of the following options:\n\n")
 
 	// Push
 	for _, d := range duoResults.Devices.Devices {
@@ -289,7 +292,6 @@ func shibLogin(args args_t, idpUrl string, idpRequest string) (string, error) {
 		// one of the radio options was selected
 		fm.Input("duo_device", devices[optint].Device)
 		err = fm.Set("duo_factor", devices[optint].OptionType)
-		fmt.Println(err)
 	}
 
 	// submit form
