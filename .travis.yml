@@ -14,7 +14,8 @@ script:
 - go test -v -race ./...
 - if [ "${LATEST}" = "true" ]; then gox -os="linux darwin windows" -arch="amd64" -output="pcsl.."
   -ldflags "-X main.Rev=`git rev-parse --short HEAD`" -verbose ./...; fi
-deploy2:
+
+deploy:
   provider: releases
   skip_cleanup: true
   api_key:
