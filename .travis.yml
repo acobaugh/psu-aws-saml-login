@@ -12,7 +12,7 @@ script:
 - go get -t -v ./...
 - diff -u <(echo -n) <(gofmt -d .)
 - go test -v -race ./...
-- if [ "${LATEST}" = "true" ]; then gox -os="linux darwin windows" -arch="amd64" -output="pcsl.."
+- if [ "${LATEST}" = "true" ]; then gox -os="linux darwin windows" -arch="amd64" -output="{{.Dir}}.{{.OS}}_{{.Arch}}"
   -ldflags "-X main.Rev=`git rev-parse --short HEAD`" -verbose ./...; fi
 
 deploy:
@@ -21,9 +21,9 @@ deploy:
   api_key:
     secure: gkrpLD07DCYmyAhRpussPRbUU3isNQ2+Xl3uNUeif8FouMjCQ5G4SIJ3afCEM3da6r+Dw6wNuqEr/R18PMs5V5K1lHpkxVMDKiFXTvJBPmGDiEU6arHqtgxbeiCC4t0Q3LTrR/YvT+6/kv2PUzQfF1+J2faGqZKKJ910Sl9r+8rZJj5IEsUieyj/AwhHjSRA9YM3JweV9ktrpG/zKaSK2PX3+6+B0MVWnYIP27XFqM2bOD2PR0ZMX08A6pYl9zvO1ipOiT0zlO426xk2R4bDXRB/WBR2euUkEbCRTJ1Rh/643FYhAR5sJk1v71MGsnHFgBVD35//t5aLzNmhwnHxJt8BP/hnDa11P4+6gdXR3qhekdh9f/18YeDJC2mbzkGRI+Y0ieeuqDn9LkxBpTI1mTxvs2qwxmiwaGVFzTLFLRp8rc5o658dlm1/W2/IAb08ldrBYhqyj4+jd5gh8vZsbfFUNDRSwh63IKSekBrPHAPWWrzxTtuHXRFbq/pU+/aUcqalMdjit2BOibPDVPWWbRgJLgDQOne1zLUV3crne9bEh/9DZSHzAYq0ueqKibXWTw9FAWKRvf8lO6LAQgnsZuK96UL1OWuG5CbhUhivI916PfgA/tMTMzyXRaKJwLQnO9Vc/zQhZqL6rEr0Z7DdtRJx2qQhXLEVe43cLGw3bDM=
   file:
-  - pcsl.windows.amd64.exe
-  - pcsl.darwin.amd64
-  - pcsl.linux.amd64
+  - pcsl.windows_amd64.exe
+  - pcsl.darwin_amd64
+  - pcsl.linux_amd64
   on:
     repo: acobaugh/psu-aws-saml-login
     tags: true
