@@ -49,6 +49,7 @@ type awsRole struct {
 type args_t struct {
 	ExportEnv bool   `arg:"-e",help:"Provide 'export foo = bar' output to copy/paste into another terminal"`
 	User      string `arg:"-u",help:"Access Account username"`
+	Role      string `arg:"--role",help:"AWS IAM role arn to assume"`
 }
 
 const AWS_SAML_ROLE_ATTRIBUTE = "https://aws.amazon.com/SAML/Attributes/Role"
@@ -80,22 +81,35 @@ func main() {
 	}
 
 	// get selection
-	selection := 0
-	if len(roles) > 1 {
-		// present list of roles
-		fmt.Printf("Select the role to assume:\n\n")
+	selection := -1
+
+	if args.Role != "" {
 		for r := range roles {
-			fmt.Printf(" %d. %s\n", r, roles[r].RoleARN)
+			if args.Role == roles[r].RoleARN {
+				selection = r
+			}
 		}
-		reader := bufio.NewReader(os.Stdin)
-		for {
-			fmt.Printf("\nSelection (0-%d): ", len(roles)-1)
-			str, _ := reader.ReadString('\n')
-			selection, _ = strconv.Atoi(strings.TrimSpace(str))
-			if selection < 0 || selection > len(roles)-1 {
-				fmt.Fprintf(os.Stderr, "selection is out of range: %d\n", selection)
-			} else {
-				break
+		if selection == -1 {
+			fmt.Fprintf(os.Stderr, "Chosen role \"%s\" not in list of roles returned by SAML assertion. Perhaps you do not have access to this role?", args.Role)
+			os.Exit(1)
+		}
+	} else {
+		if len(roles) > 1 {
+			// present list of roles
+			fmt.Printf("Select the role to assume:\n\n")
+			for r := range roles {
+				fmt.Printf(" %d. %s\n", r, roles[r].RoleARN)
+			}
+			reader := bufio.NewReader(os.Stdin)
+			for {
+				fmt.Printf("\nSelection (0-%d): ", len(roles)-1)
+				str, _ := reader.ReadString('\n')
+				selection, _ = strconv.Atoi(strings.TrimSpace(str))
+				if selection < 0 || selection > len(roles)-1 {
+					fmt.Fprintf(os.Stderr, "selection is out of range: %d\n", selection)
+				} else {
+					break
+				}
 			}
 		}
 	}
