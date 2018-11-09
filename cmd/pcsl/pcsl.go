@@ -313,7 +313,7 @@ func shibLogin(args args_t, idpUrl string, idpRequest string) (string, error) {
 			os.Exit(1)
 		}
 
-		fm.Set("duo_passcode", strconv.Itoa(optint)) 
+		fm.Set("duo_passcode", strconv.Itoa(optint))
 		fm.Set("duo_device", tokenId)
 		fm.Set("duo_factor", "passcode")
 	} else {
