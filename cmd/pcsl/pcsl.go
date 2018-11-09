@@ -270,6 +270,7 @@ func shibLogin(args args_t, idpUrl string, idpRequest string) (string, error) {
 			fmt.Printf(" %d. SMS passcodes to %s %s\n", len(devices)-1, d.DisplayName, nextcode)
 		}
 	}
+	// token
 
 	fmt.Println()
 
@@ -300,7 +301,20 @@ func shibLogin(args args_t, idpUrl string, idpRequest string) (string, error) {
 	// note: duo_factor is added to the form dynamically, so we Set() instead of Input()
 	if optint > len(devices)-1 {
 		// selection is larger than the number of options, assume it is a passcode
-		fm.Input("duo_passcode", option)
+		// find the duo_device with type = token
+		tokenId := ""
+		for _, d := range duoResults.Devices.Devices {
+			if d.Type == "token" {
+				tokenId = d.Device
+			}
+		}
+		if tokenId == "" {
+			fmt.Fprintf(os.Stderr, "No token devices were returned by the duo service, unable to continue\n")
+			os.Exit(1)
+		}
+
+		fm.Set("duo_passcode", strconv.Itoa(optint)) 
+		fm.Set("duo_device", tokenId)
 		fm.Set("duo_factor", "passcode")
 	} else {
 		// one of the radio options was selected
